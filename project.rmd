@@ -1,0 +1,238 @@
+---
+title: 'Practice Machine Learning Project: fit band analysis'
+author: "Francisco González Alonso"
+date: "2016/09/11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#INTRODUCTION
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. 
+
+In this project, our goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: <http://groupware.les.inf.puc-rio.br/har> (see the section on the Weight Lifting Exercise Dataset). 
+
+##Data Summary:
+
+The training data for this project are available here:
+
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv>
+
+The test data are available here:
+
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv>
+
+
+##Target
+
+The goal of my project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. 
+
+You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases. 
+
+# PRELIMINARY ANALYSIS:
+
+## Loading Library :
+
+To do the study I will use the libraries: CARET and RANDOM FOREST.
+
+```{r}
+library(randomForest);
+library(caret);
+```
+## loading Data:
+
+I download the files and load them in different data frames.
+
+```{r}
+urlTraining <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv";
+urlTesting  <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv";
+fileTraining <- "training.csv"
+fileTesting  <- "testing.csv"
+
+download.file(urlTraining, fileTraining);
+download.file(urlTesting, fileTesting);
+
+df.training <- read.csv(fileTraining, na.strings = c("NA", ""));
+df.validation <- read.csv(fileTesting, na.strings = c("NA", ""));
+```
+
+
+## Data's Overview:
+My first step is compare the dimensions of both data sets:
+
+```{r}
+dim (df.training);
+##str(df.training);
+dim(df.validation);
+##str(df.validation);
+```
+
+They are similar in the number of columns, and the next step is verifying the 
+name and class of the columns:
+
+```{r}
+compColNames<-names(df.training)==names(df.validation);
+compColNames;
+
+compColClass<-sapply(df.training, class)==sapply(df.validation, class);
+compColClass;
+```
+
+And I found differences in the last column of data sets::
+```{r}
+names(df.training)[!compColNames];
+class(df.training[,!compColNames]);
+names(df.validation)[!compColNames];
+class(df.validation[,!compColNames]);
+```
+Both in the name and class type.
+
+And exists differences with the class type of variables, with the same name:
+
+```{r}
+sapply(df.training[,compColClass], class);
+sapply(df.validation[,compColClass], class);
+```
+
+And thus i only will use to do my model the variables with the same name and class, except the seven first, because they are irrelevant:
+
+```{r}
+## Adding the last column "clasee" to training dataset:
+compColClass[length(compColClass)] <-TRUE;
+
+## Delete the seven first columns because are irrelevants
+compColClass[1:7] <-FALSE;
+
+## Select only the columns relevants
+df.training<-df.training[,compColClass];
+df.validation<-df.validation[,compColClass];
+
+## Rename the problem_id to convert to classe column.
+df.validation$problem_id<-""
+colnames(df.validation)[ colnames(df.validation) == "problem_id" ] <- "classe"
+df.validation$classe<-factor(df.validation$classe);
+levels(df.validation$classe) <- levels(df.training$classe);
+```
+
+In the validation dataset the do not exist the "class" column and therefore it 
+has not utility to test my future model,  thus I need a split the training set 
+to a new training and testing dataset .
+
+However, i will use the validation set to will predict 20 different test cases.
+
+## Creation of Testing Dataset :
+
+For test my future model I will need do training the model with a set of data (training data set - 75%) and testing it with another set of data (testing data set -25% ).
+
+I can create a new data sets, using the [createDataPartition function](http://topepo.github.io/caret/splitting.html) of caret package, using my original df.training dataset.
+
+```{r}
+set.seed(000000);
+df.aux<-df.training;
+trainIndex <- createDataPartition(df.aux$classe, p = .75, list = FALSE);
+df.training <- df.aux[ trainIndex,];
+df.testing  <- df.aux[-trainIndex,];
+```
+
+
+# PREPROCESSING DATA:
+
+## NZV Analisys: detecting variables without variance.
+
+I try to detect regressor variables without variance, for this I use the [nearZeroVar function](http://topepo.github.io/caret/preprocess.html#nzv) of caret package:
+
+```{r}
+nzv<- nearZeroVar(df.training, saveMetrics= TRUE);
+nzv;
+```
+
+The function returns:
+
+* Variable regressors with 0 variance = `r if(length(nzv)!=0){dim(nzv[nzv$zeroVar==TRUE,])[1]}else{print("0")}`.
+* Variable regressors with **near** 0 variance = `r if(length(nzv)!=0){dim(nzv[nzv$nzv==TRUE,])[1]}else{print("0")} `.
+
+Thus i do not exclude no column of dataset.
+```{r}
+nzv<- nearZeroVar(df.training);
+if(length(nzv)!=0){
+  df.training <- df.training[,-nzv];
+  df.testing <- df.testing[,-nzv];
+  df.validation <- df.validation[,-nzv];
+}
+```
+
+## Correlation Analysis: detecting variables with correlation.
+
+I try to detect regressor variables with correlation among them, for this I use the [findCorrelation function](http://topepo.github.io/caret/pre-processing.html#identifying-correlated-predictors) of caret package:
+
+```{r}
+matrix.correlation <- cor(df.training[,-50]);
+summary(matrix.correlation[upper.tri(matrix.correlation)]);
+```
+
+Exist columns with correlation near 1, thus I delete the vars with correlation 
+upper 0.8:
+
+```{r}
+indexCorr <- findCorrelation(matrix.correlation, cutoff = .80);
+names(df.training[,indexCorr]);
+
+df.training <- df.training[,-indexCorr];
+df.testing <- df.testing[,-indexCorr];
+df.validation <- df.validation[,-indexCorr];
+
+matrix.correlation <- cor(df.training[,-dim(df.training)[2]]);
+summary(matrix.correlation[upper.tri(matrix.correlation)]);
+```
+
+
+# MODEL CONSTRUCTION: RANDOM FOREST WITH CROSS VALIDATION.
+
+I finished to preprocesing data, thus the next step is construct the model, I choose the random forest algorithm to try to clasify the different exercises (classe column) with the rest of regressors. 
+
+
+```{r}
+set.seed(00000);
+modelFitControl<-trainControl(method = "repeatedcv", number=5, repeats=2);
+model.fit<-train(classe ~ ., data=df.training, method="rf", metric="Accuracy", trControl=modelFitControl);
+```
+
+And I display the final model:
+
+```{r}
+print(model.fit);
+plot(model.fit);
+plot(model.fit$finalModel);
+plot(varImp(model.fit));
+```
+
+And now I test the model to obtain his quality:
+```{r}
+result <- predict(model.fit, df.testing);
+confusion.matrix <- confusionMatrix(result, df.testing$classe);
+print(confusion.matrix);
+```
+
+The model is `r round(confusion.matrix$overall['Accuracy'] * 100, 2)`% accurate on the testing data from the training data. The expected out of sample error is roughly `r  round(1 - confusion.matrix$overall['Accuracy'],2)`%.
+
+# PREDICTIONS
+
+The last step is get the "class" for 20 values of the validation dataset:
+```{r}
+validation <- predict(model.fit, df.validation);
+print(validation);
+```
+
+# SAVE THE MODEL
+I Save the model for another use:
+```{r}
+save(model.fit, file="modelFit.RData");
+
+```
+
+
+
+
